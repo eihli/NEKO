@@ -73,7 +73,7 @@ class TextTask(Task):
         return inputs, targets
         
     def evaluate(self, model, num_examples_to_test=100, deterministic=True, log_examples_to_output=False):
-        tokenizer = model.text_tokenizer
+        tokenizer = model.module.text_tokenizer
         loss_fn = nn.CrossEntropyLoss()
         total_loss = 0
         total_tokens = 0
@@ -99,7 +99,7 @@ class TextTask(Task):
 
             # Generate prediction
             # todo - max_length should not be 20. More dynamic.
-            pred_logits, pred_tokens = model.predict_text(new_batch_dict, max_length=20, deterministic=deterministic)
+            pred_logits, pred_tokens = model.module.predict_text(new_batch_dict, max_length=20, deterministic=deterministic)
             if log_examples_to_output and idx%10==0:
                 # todo - remove debug statements
                 print(f'Text Example : {tokenizer.decode(batch_dict["text"])} \n Input passed to model : {tokenizer.decode(new_batch_dict["text"].squeeze())} \n Predicted output : {tokenizer.decode(pred_tokens.squeeze())}')

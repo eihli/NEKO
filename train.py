@@ -75,8 +75,7 @@ def main(args):
         pad_seq=args.pad_seq,
     )
     args.embed_dim = model.embed_dim
-    model = accelerator.prepare(model)
-    
+
     if args.lora:
         assert args.pretrained_lm is not None, 'Must specify pretrained LM for LORA'
         peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout)
@@ -107,8 +106,8 @@ def main(args):
     scheduler = get_linear_warmup_cosine_decay_scheduler(optimizer, args.warmup_steps, args.training_steps, base_lr=args.learning_rate, init_lr=args.init_lr, min_lr=args.learning_rate / args.min_factor, cosine_decay=not args.disable_cosine_decay)
 
     # setup up Accelerate, without dataloader:
-    #model, optimizer, scheduler = accelerator.prepare(model, optimizer, scheduler)
-    optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
+    model, optimizer, scheduler = accelerator.prepare(model, optimizer, scheduler)
+    #optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
 
     if args.use_wandb:
         wandb.init(
