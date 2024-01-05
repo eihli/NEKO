@@ -3,7 +3,6 @@ import os
 import json
 import time
 
-import numpy as np
 import torch
 
 from peft import LoraConfig, TaskType, get_peft_model
