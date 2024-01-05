@@ -1,5 +1,6 @@
 import time
 import os
+from accelerate import Accelerator
 
 import wandb
 import numpy as np
@@ -13,7 +14,7 @@ class Trainer:
         self,
         model,
         optimizer,
-        accelerator,
+        accelerator: Accelerator,
         scheduler,
         tasks,
         exp_name,
