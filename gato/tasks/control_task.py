@@ -21,6 +21,8 @@ def tokens_per_space(space):
         return space.shape[0]
     elif type(space) == gym.spaces.Discrete:
         return 1
+    elif isinstance(space, gym.spaces.Dict):
+        return 1
     else:
         raise NotImplementedError(f'Unsupported space: {space}')
     
@@ -47,7 +49,6 @@ class ControlTask(Task):
         self.action_type = type(self.env.action_space)
         self.observation_type = type(self.env.observation_space)
         assert self.action_type in supported_spaces, f'Unsupported action space: {self.env.action_space}'
-        assert self.observation_type in supported_spaces, f'Unsupported observation space: {self.env.observation_space}'
 
         # Determine types of obseravation, action for task
         if type(self.env.observation_space) == gym.spaces.Box:
@@ -57,6 +58,10 @@ class ControlTask(Task):
                 obs_str = 'continuous_obs'
         elif type(self.env.observation_space) == gym.spaces.Discrete:
             obs_str = 'discrete_obs'
+        elif isinstance(self.env.observation_space, gym.spaces.Dict):
+            obs_str = 'dict_obs'
+        else:
+            raise AssertionError(f'Unsupported observation space: {self.env.observation_space}')
         self.obs_str = obs_str
 
         if obs_str == 'images':

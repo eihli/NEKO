@@ -63,6 +63,7 @@ class GatoPolicy(nn.Module):
         self.vocab_size = self.text_tokens + self.discrete_tokens + self.continuous_tokens
         
         # order of text, continuous, discrete
+        # See section 2.1, Tokenization, of the Gato paper: http://arxiv.org/abs/2205.06175
         self.token_starts = {
             'text': 0,
             'continuous': self.text_tokens,
