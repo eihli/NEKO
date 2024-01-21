@@ -21,7 +21,13 @@ from gato.tasks.text_task import TextTask
 
 def main(args):
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(cpu=args.cpu, mixed_precision=args.mixed_precision, split_batches=True, gradient_accumulation_steps=args.gradient_accumulation_steps, kwargs_handlers=[ddp_kwargs])
+    accelerator = Accelerator(
+        cpu=args.cpu,
+        mixed_precision=args.mixed_precision,
+        split_batches=True,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        kwargs_handlers=[ddp_kwargs]
+    )
     device = accelerator.device
     args.device = accelerator.device
 
@@ -101,7 +107,15 @@ def main(args):
     )
 
     # Setup scheduler
-    scheduler = get_linear_warmup_cosine_decay_scheduler(optimizer, args.warmup_steps, args.training_steps, base_lr=args.learning_rate, init_lr=args.init_lr, min_lr=args.learning_rate / args.min_factor, cosine_decay=not args.disable_cosine_decay)
+    scheduler = get_linear_warmup_cosine_decay_scheduler(
+        optimizer,
+        args.warmup_steps,
+        args.training_steps,
+        base_lr=args.learning_rate,
+        init_lr=args.init_lr,
+        min_lr=args.learning_rate / args.min_factor,
+        cosine_decay=not args.disable_cosine_decay
+    )
 
     # setup up Accelerate, without dataloader:
     #model, optimizer, scheduler = accelerator.prepare(model, optimizer, scheduler)
