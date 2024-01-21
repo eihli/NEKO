@@ -159,11 +159,21 @@ class GatoPolicy(nn.Module):
             assert 'token_embeddings' in kwargs and 'tokens' in kwargs and 'token_target_masks' in kwargs and 'token_masks' in kwargs, 'if inputs is None, must provide embeddings, tokens, and masks'
             token_embeddings = kwargs['token_embeddings']
             tokens = kwargs['tokens']
+            # What's the difference?
+            #   token_mask -> is 1 or 0 mask (in some q-learning frameworks (jax) the convention flips)
+            #   token_target_mask -> if you want this token to be predicted and to contribute to the loss
+            #     For example: you don't want to predict control tokens on a text task.
+            #       Also, in GATO, we don't try to predict images.
             token_target_masks = kwargs['token_target_masks']
             token_masks = kwargs['token_masks']
 
         # pass to transformer
         #final_representations = self.transformer(x = token_embeddings, custom_mask = token_masks, batch_first=True)
+        # TODO: What is this?
+        # (batch size, seq len, embedding size)
+        # You sometimes have to pad your sequences. They're all different lengths but get padded to max length
+        # That means some batches have tokens that aren't real. You don't want to use them as part
+        # of the loss/attention calculation.
         final_representations = self.transformer(inputs_embeds=token_embeddings, attention_mask=token_masks)['last_hidden_state']
 
         # predict logits
@@ -175,6 +185,11 @@ class GatoPolicy(nn.Module):
             token_masks = token_masks[:, :-1] # whether originating token is valid  (remove last token from mask) 
 
             token_target_masks = token_target_masks[:, 1:]  # whether target token is valid
+            # TODO:
+            #   This is an elementwise multiplication
+            #   Something only contributes to loss if it's a valid token
+            #   and it's a token that we are _supposed_ to be predicting.
+            #   Both of these are determined in the `tokenize_input_dicts` function
             loss_masks = token_masks * token_target_masks  
             target_tokens = tokens[:, 1:] 
 
@@ -191,6 +206,9 @@ class GatoPolicy(nn.Module):
 
 
     def tokenize_input_dicts(self, inputs: list):
+        # assumes `input` will always have exactly 1 of observations and 1 of actions (see `tokenize_input_dicts`)
+        # TODO:
+        #   Handle multiple `observations` keys.
         """"
         inputs: list of dicts for a batch
         [
@@ -279,6 +297,9 @@ class GatoPolicy(nn.Module):
                 n_patches = image_embeddings.shape[1]
                 #image_tokens = torch.ones(n_images, n_patches) * -1
                 image_tokens = torch.zeros(n_images, n_patches, dtype=torch.long, device=self.device)
+                # TODO: see comment in gato_policy.py line 172
+                #   These will get real embeddings but won't get predicted. We predict caption/text.
+                #   Even in control, we don't predict the next "image" or whatever, we predict the action.
                 image_targets_masks = torch.zeros(n_images, n_patches, device=self.device)
                 if n_timesteps is None:
                     n_timesteps = n_images
@@ -348,6 +369,7 @@ class GatoPolicy(nn.Module):
             )
 
             # interleave targets
+            # Masks:
             batch_target_masks = torch.cat(
                 [
                     targets for targets in
@@ -357,6 +379,8 @@ class GatoPolicy(nn.Module):
                 dim=1
             )
             # interleave embeddings, n_timesteps x n_tokens x embed_dim
+            # TODO:
+            #   This is the line that creates the "separated" '|' array of input tokens
             batch_embeddings = torch.cat(
                 [
                     embeddings for embeddings in
@@ -462,6 +486,10 @@ class GatoPolicy(nn.Module):
     # infer how many tokens needed to generate using environment, and restrict tokens generated to valid tokens for env
     def predict_control(self, input: dict, task: ControlTask, deterministic: bool = True):
         """For a single control example, generate prediction (action)"""
+        # ^ Not used in training
+        # this function doesn't care about which fields are in the observation tokens.
+        # This passes input to tokenize_input_dicts
+        # assumes `input` will always have exactly 1 of observations and 1 of actions (see `tokenize_input_dicts`)
 
         # expects that inputs['continuous_actions'] or inputs['discrete_actions'] are padded by 1 timestep
 
@@ -481,6 +509,12 @@ class GatoPolicy(nn.Module):
         if action_str == 'discrete':
             assert task.env.action_space.n <= self.discrete_tokens, "discrete action space too large for model"
             end_token = start_token + task.env.action_space.n - 1
+        # TODO:
+        #   We're assuming there's a single observation and a single action.
+        #   (Action string will stay the same)
+        #   But we'll have a list of multiple observations (text, direction image)
+        #   Will have to update all three of these fields.
+        #   Iterate through each field and fill in appropriate section of input tokens
         token_embeddings, _, _, token_masks = self.tokenize_input_dicts([input])
 
         # remove last action_tokens tokens, which are padding
@@ -494,6 +528,12 @@ class GatoPolicy(nn.Module):
             logits, _ = self.forward(token_embeddings=token_embeddings, token_masks=token_masks, token_target_masks=None, tokens=None)
             # extract valid logits from last timestep
             logits = logits[0, -1, start_token:(end_token+1)]
+            # TODO:
+            #   Make this function accept a temperature. Right now it's 1 or 0, det or not.
+            #   See `decision-transformer` GIthub Repo and arxiv paper
+            #   They have some temperature code in there.
+            #   GATO doesn't condition on rewards. That paper does.
+            #   Decision transformer paper has open code repo.
             if deterministic:
                 token = torch.argmax(logits, dim=-1)
             else:
