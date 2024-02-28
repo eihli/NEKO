@@ -36,7 +36,7 @@ def main(args):
         kwargs_handlers=[ddp_kwargs],
         log_with=log_with,
     )
-    args.device = accelerator.device.type
+    args.device = accelerator.device
 
     exp_date = datetime.now().strftime('%y-%m-%d_%H-%M-%S')
     exp_name = f'neko-gato_{exp_date}'
@@ -103,7 +103,7 @@ def main(args):
     )
     args.embed_dim = model.embed_dim
     model = accelerator.prepare(model)
-    
+
     if args.lora:
         assert args.pretrained_lm is not None, 'Must specify pretrained LM for LORA'
         peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout)
@@ -118,7 +118,6 @@ def main(args):
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('Trainable Parameters:', '{}M'.format(params / 1e6))
     args.trainable_params = params
-
 
     model.device = args.device
 

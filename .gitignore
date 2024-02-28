@@ -5,3 +5,6 @@ args.json
 wandb/
 *.egg-info
 .idea
+*.tar
+vqa_data/
+caption_data/

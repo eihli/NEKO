@@ -60,17 +60,17 @@ class VqaTask(Task):
                 questions = json.load(json_file)['questions'] # This is a list of question IDs and the corresponding questions
 
             assert len(annotations) == len(questions), "Number of annotations must be equal to number of questions" 
-        
+
             for idx in range(len(questions)):
                 assert annotations[idx]['image_id'] == questions[idx]['image_id'] and annotations[idx]['question_id'] == questions[idx]['question_id']
                 image_id = str(annotations[idx]['image_id'])
                 img_file_name = img_name_prefix[dir_idx] + '0' * (img_file_name_len[dir_idx] - len(image_id) - len(img_name_prefix[dir_idx])) + image_id + '.jpg'
                 try:
                     # if the image file does not exist or transpose does not work due to damaged data, we simply discard this sample and move to next
-                    img = Image.open(data_directory + img_file_name) 
-                    img= img.resize((256, 256))
-                    img_data = np.asarray(img)
-                    img_data = img_data.transpose(2, 0, 1) # reshape from (256, 256, 3) to (3, 256, 256)
+                    with Image.open(data_directory + img_file_name) as img:
+                        img = img.resize((256, 256))
+                        img_data = np.asarray(img)
+                        img_data = img_data.transpose(2, 0, 1) # reshape from (256, 256, 3) to (3, 256, 256)
                 except:
                     continue
                 # Need to add a new dimension to (3, 256, 256) so it becomes (1, 3, 256, 256) where the added dummy dimension at dim 0 is the num_images. 
