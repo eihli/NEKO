@@ -8,3 +8,4 @@ wandb/
 *.tar
 vqa_data/
 caption_data/
+.ipynb_checkpoints/
