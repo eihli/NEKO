@@ -1,22 +1,13 @@
+from collections.abc import Callable
 from typing import Any
-# Assume all datasets are downloaded and available from local directories
 from gato.tasks.task import Task
 
-import os
-from PIL import Image
-import io # need to use BytesIO
-
-import numpy as np
-import math
 import torch
-from torch.nn import functional as F
 from torch import nn
-import json
 import random
 from torch.utils.data import DataLoader
-from tokenizers import Tokenizer
-from transformers import AutoTokenizer, GPT2Tokenizer
 import datasets
+from datasets import Dataset
 
 class VqaTask(Task): 
     def __init__(self, train_dataloader: DataLoader, test_dataloader: DataLoader):
@@ -72,21 +63,13 @@ class VqaTask(Task):
         }
         return metrics
 
-class IdentityTransform():
-    def __call__(self, sample: Any):
-        return sample
-
-class VqaDataset(datasets.IterableDataset):
-    def __init__(self, dataset: datasets.Dataset, transform=IdentityTransform()):
-        self.transform = transform
-        self.dataset = dataset.to_iterable_dataset(num_shards=8).shuffle(seed=42)
-
-    def __iter__(self):
-        for sample in iter(self.dataset):
-            answers = sample['answers']
-            del sample['answers']
-            sample.update(random.choice(answers))
-            yield self.transform(sample)
+class VqaAnswerTransform():
+    def __call__(self, batch):
+        answers = batch['answers']
+        del batch['answers']
+        i = random.randint(0, len(answers[0])-1)
+        batch['answer'] = [a[i]['answer'] for a in answers]
+        return batch
 
 # test code
 if __name__ == '__main__':
@@ -96,15 +79,19 @@ if __name__ == '__main__':
     ok_vqa_builder.download_and_prepare(file_format='arrow')
     ds = ok_vqa_builder.as_dataset()
     vqa_transforms = transforms.Compose([
+        transforms.Resize(size=(256, 256)),  # Would you believe order matters here?
+                                            # https://github.com/pytorch/vision/blob/main/torchvision/transforms/v2/_transform.py#L57
         transforms.PILToTensor(),
-        transforms.CenterCrop(1024),
-        transforms.Resize(size=(256, 256))
+        VqaAnswerTransform(),
     ])
-    task = VqaTask(
-        DataLoader(VqaDataset(ds['train'], vqa_transforms), batch_size=4),
-        DataLoader(VqaDataset(ds['validation'], vqa_transforms), batch_size=4),
-    )
-
+    ds.set_transform(vqa_transforms)
+    train = ds['train']
+    valid = ds['validation']
+    train = ds['train'].shuffle(seed=42)
+    valid = ds['validation'].shuffle(seed=42)
+    train_data_loader = DataLoader(train, batch_size=4, shuffle=False)
+    valid_data_loader = DataLoader(valid, batch_size=4, shuffle=False)
+    task = VqaTask(train_data_loader, valid_data_loader)
     batch = task.sample_batch()
     print(type(batch))
     print(list(batch.keys()))
