@@ -545,7 +545,7 @@ class GatoPolicy(nn.Module):
         return pred_logits, pred_caption
 
     def predict_answer(self, image, question, max_length=16, deterministic=True):
-        prompt_tokens = self.text_tokenizer.encode(question)
+        prompt_tokens = self.text_tokenizer(question)['input_ids']
         pred_logits, pred_answer =  self.predict_response(image, prompt_tokens = prompt_tokens, max_length=max_length, deterministic=deterministic)
         return pred_logits, pred_answer
 
