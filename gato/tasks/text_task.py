@@ -29,6 +29,12 @@ class TextTask(Task):
             # https://huggingface.co/docs/datasets/v2.14.4/en/process#concatenate
             # must have the same feature columns
             self.text_dataset = concatenate_datasets(text_datasets_list)
+        # The dataset we've been testing with, wikitext-2-v1, has a lot of samples that are just empty lines.
+        # It's pointless to train on those, and they just needlessly take up space in our batch if we
+        # let them through, so I'm going to filter them out right here. But the filtering process might be pretty
+        # specific, not very generalizable, so you may need to change this in the future once we expand
+        # to more datasets.
+        self.text_dataset = self.text_dataset.filter(lambda x: x['text'].strip() != '')
 
         
     def sample_batch(self, batch_size, is_test=False) -> List[Dict]:
