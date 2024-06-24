@@ -8,7 +8,7 @@ from datasets import load_dataset
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from transformers import GPT2TokenizerFast
+from transformers import GPT2TokenizerFast, GPT2Config, GPT2Model
 
 
 text_tokenizer = GPT2TokenizerFast.from_pretrained("openai-community/gpt2")
@@ -349,6 +349,8 @@ def image_embedding(tokens: torch.Tensor) -> torch.Tensor:
 ####
 #### The preparation process
 ####
+
+## TODO: See section 2.3, we need a mask to calculate loss.
 def prepare_text(batch):
     embeddings = lookup_embedding(batch["input_ids"])
     # No special sequencing needs to be done for text.
@@ -361,6 +363,63 @@ def prepare_vqa(batch):
     answer_embeddings = lookup_embedding(batch["answer_input_ids"])
     sequence = torch.concat([question_embeddings, image_embeddings, answer_embeddings], dim=1)
     return sequence
+
+
+
+####
+#### The transformer
+####
+def init_model():
+    configuration = GPT2Config()
+    model = GPT2Model(configuration)
+    return model
+
+
+def init_optimizer(params):
+    optimizer = torch.optim.AdamW(params)
+    return optimizer
+
+def train(model):
+    model = init_model()
+    params = list(model.parameters()) + list(_lookup_embedding.parameters()) + list(_image_embedding.parameters())
+    optimizer = init_optimizer(params)
+
+    text_dataset = (
+        load_dataset(path="wikitext", name="wikitext-2-v1", streaming=True)
+        .filter(not_empty)
+        .map(tokenize, batched=True, batch_size=1000)
+    )
+    text_dataloader = DataLoader(
+        text_dataset["train"], batch_size=8, collate_fn=mg.collate_fn
+    )
+
+    vqa_dataset = load_dataset("eihli/micro-ok-vqa", streaming=True).with_format(
+        "torch"
+    )
+    vqa_dataloader = DataLoader(
+        vqa_dataset["train"]
+        .map(vqa_img_transform)
+        .map(vqa_qa_transform, batched=True, batch_size=8)
+        .map(vqa_img_tokenize, batched=True, batch_size=8),
+        batch_size=8,
+    )
+
+
+    loss_fn = nn.CrossEntropyLoss()
+    for epoch in range(80):
+        text_batch = next(text_dataloader)
+        vqa_batch = next(vqa_dataloader)
+        text_sequence = prepare_text(text_batch)
+        vqa_sequence = prepare_vqa(vqa_batch)
+        inputs = torch.concat([text_sequence, vqa_sequence])
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = loss_fn(output, target)
+        loss.backward()
+        optimizer.step()
+
+        if epoch % 10 == 0:
+            print(f"Epoch [{epoch}/100], Loss: {loss.item()}")
 
 
 if __name__ == "__main__":
