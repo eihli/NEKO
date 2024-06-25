@@ -1,9 +1,10 @@
-from typing import Callable
+from typing import Callable, Tuple
 import random
 
 import minari
 import torch
 import torch.nn as nn
+from accelerate import Accelerator
 from datasets import load_dataset
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -44,11 +45,9 @@ def collate_fn(batch):
     333 items in a batch, where each item was of length batch_size.
 
     """
-    text = [s["text"] for s in batch]
     input_ids = torch.tensor([s["input_ids"] for s in batch])
     attention_mask = torch.tensor([s["attention_mask"] for s in batch])
     return {
-        "text": text,
         "input_ids": input_ids,
         "attention_mask": attention_mask,
     }
@@ -201,10 +200,8 @@ def vqa_qa_transform(batch):
     )
     return {
         "image": batch["image"],
-        "question": question,
         "question_input_ids": question_tokenized["input_ids"],
         "question_attention_mask": question_tokenized["attention_mask"],
-        "answer": answer,
         "answer_input_ids": answer_tokenized["input_ids"],
         "answer_attention_mask": answer_tokenized["attention_mask"],
     }
@@ -218,7 +215,7 @@ def demo_vqa_dataloader():
         vqa_dataset["train"]
         .map(vqa_img_transform)
         .map(vqa_qa_transform, batched=True, batch_size=8)
-        .map(vqa_img_tokenize, batched=True, batch_size=8),
+        .map(vqa_img_tokenize, batched=True, batch_size=8, remove_columns=["answers", "question", "answer_type", "question_type", "confidence"]),
         batch_size=8,
     )
     vqa_batch = next(iter(vqa_dataloader))
@@ -326,7 +323,7 @@ class ResNetV2Block(nn.Module):
         out = self.gn2(out)
         out = self.gelu(out)
         out = self.conv2(out)
-        return x + out.view(B, P, C, H, W).permute(0, 1, 3, 4, 2).view(B, P, HWC)
+        return x + out.reshape(B, P, C, H, W).permute(0, 1, 3, 4, 2).reshape(B, P, HWC)
 
 
 _image_embedding = ResNetV2Block(3, EMBEDDING_DIM)
@@ -337,40 +334,96 @@ def image_embedding(tokens: torch.Tensor) -> torch.Tensor:
 
 
 ####
-#### Sequencing
+#### Embedding and sequencing
 ####
-
 
 ## Sequencing is needed because some modalities don't have an inherent order of
 ## all of their inputs. Text does. It's just the order of the words in the text.
 ## But what order should the tokens be for a question/image pair? Should the
 ## image tokens come first? Or the question?
 
-####
-#### The preparation process
-####
 
-## TODO: See section 2.3, we need a mask to calculate loss.
-def prepare_text(batch):
+## Targets
+##
+## Since we're doing text prediction, our targets are just going to be the
+## offset-by-one of the inputs. We could have included those in the data loader,
+## or we can calculate them later.
+def targets(t: torch.Tensor) -> torch.Tensor:
+    tail = torch.full((t.size(0), 1), text_tokenizer.eos_token_id, dtype=torch.long, device=t.device)
+    targets = torch.concat([t.type(torch.long)[:, 1:], tail], dim=1)
+    return targets
+
+
+def embed_and_sequence_text(
+    batch: dict,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     embeddings = lookup_embedding(batch["input_ids"])
     # No special sequencing needs to be done for text.
-    return embeddings
+    return (
+        embeddings,
+        batch["attention_mask"].unsqueeze(-1),
+        targets(batch["input_ids"]),
+    )
 
 
-def prepare_vqa(batch):
+def embed_and_sequence_vqa(
+    batch: dict,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     image_embeddings = image_embedding(batch["image"])
     question_embeddings = lookup_embedding(batch["question_input_ids"])
+    question_targets = targets(batch["question_input_ids"])
     answer_embeddings = lookup_embedding(batch["answer_input_ids"])
-    sequence = torch.concat([question_embeddings, image_embeddings, answer_embeddings], dim=1)
-    return sequence
+    answer_targets = targets(batch["answer_input_ids"])
+    embeddings = torch.concat(
+        [question_embeddings, image_embeddings, answer_embeddings], dim=1
+    )
+    target_sequence = torch.concat(
+        [
+            question_targets,
+            torch.zeros(image_embeddings.shape[:2], dtype=torch.long, device=question_targets.device),
+            answer_targets,
+        ],
+        dim=1,
+    )
+    attention_mask = torch.concat(
+        [
+            batch["question_attention_mask"],
+            torch.zeros(batch["image"].shape[:2], device=batch["question_attention_mask"].device),
+            batch["answer_attention_mask"],
+        ],
+        dim=1,
+    )
+    return embeddings, attention_mask.unsqueeze(-1), target_sequence
 
+
+## Loss
+##
+## See section 2.3 of the Gato paper.
+##
+##   Let b index a training batch of sequences B. We define a masking function m
+##   such that m(b, l) = 1 if the token at index l is either from text or from
+##   the logged action of an agent, and 0 otherwise. The training loss for a
+##   batch B can then be written as...
+def cross_entropy(predicted, target, mask):
+    # See: https://youtu.be/kCc8FmEb1nY?list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ&t=1553
+    B, T, C = predicted.shape
+    predicted = predicted.view(B * T, C)
+    target = target.view(-1)
+    losses = F.cross_entropy(predicted, target, reduction="none")
+    losses = losses * mask.squeeze(-1).view(-1)
+    loss = losses.sum() / mask.sum()
+    return loss
 
 
 ####
 #### The transformer
 ####
 def init_model():
-    configuration = GPT2Config()
+    configuration = GPT2Config(
+        n_layer=6,
+        n_head=6,
+        n_embd=768
+    )
     model = GPT2Model(configuration)
     return model
 
@@ -379,9 +432,32 @@ def init_optimizer(params):
     optimizer = torch.optim.AdamW(params)
     return optimizer
 
+
+####
+#### Training
+####
+## We need to remove the embedding layer from the GPT2 model because we're
+## sending it other than just text.
+class IdentityEmbedding(torch.nn.Module):
+    def forward(self, input):
+        return input
+
+
+def remove_embedding_layer_from_model(model):
+    model.set_input_embeddings(IdentityEmbedding())
+
+
 def train(model):
-    model = init_model()
-    params = list(model.parameters()) + list(_lookup_embedding.parameters()) + list(_image_embedding.parameters())
+    global _lookup_embedding, _image_embedding
+    accelerator = Accelerator()
+
+    lm_head = nn.Linear(model.config.hidden_size, text_tokenizer.vocab_size)
+    params = (
+        list(model.parameters())
+        + list(_lookup_embedding.parameters())
+        + list(_image_embedding.parameters())
+        + list(lm_head.parameters())
+    )
     optimizer = init_optimizer(params)
 
     text_dataset = (
@@ -390,7 +466,7 @@ def train(model):
         .map(tokenize, batched=True, batch_size=1000)
     )
     text_dataloader = DataLoader(
-        text_dataset["train"], batch_size=8, collate_fn=mg.collate_fn
+        text_dataset["train"], batch_size=2, collate_fn=collate_fn
     )
 
     vqa_dataset = load_dataset("eihli/micro-ok-vqa", streaming=True).with_format(
@@ -400,29 +476,33 @@ def train(model):
         vqa_dataset["train"]
         .map(vqa_img_transform)
         .map(vqa_qa_transform, batched=True, batch_size=8)
-        .map(vqa_img_tokenize, batched=True, batch_size=8),
-        batch_size=8,
+        .map(vqa_img_tokenize, batched=True, batch_size=8, remove_columns=["answers", "question", "answer_type", "question_type", "confidence"]),
+        batch_size=2,
     )
 
+    model, _lookup_embedding, _image_embedding, lm_head, optimizer, text_dataloader, vqa_dataloader = accelerator.prepare(model, _lookup_embedding, _image_embedding, lm_head, optimizer, text_dataloader, vqa_dataloader)
 
-    loss_fn = nn.CrossEntropyLoss()
-    for epoch in range(80):
+    text_dataloader = iter(text_dataloader)
+    vqa_dataloader = iter(vqa_dataloader)
+    for epoch in range(20):
         text_batch = next(text_dataloader)
         vqa_batch = next(vqa_dataloader)
-        text_sequence = prepare_text(text_batch)
-        vqa_sequence = prepare_vqa(vqa_batch)
-        inputs = torch.concat([text_sequence, vqa_sequence])
+        text_sequence, text_attention_mask, text_targets = embed_and_sequence_text(text_batch)
+        vqa_sequence, vqa_attention_mask, vqa_targets = embed_and_sequence_vqa(vqa_batch)
+        x = torch.concat([text_sequence, vqa_sequence])
+        y = torch.concat([text_targets, vqa_targets])
+        m = torch.concat([text_attention_mask, vqa_attention_mask])
         optimizer.zero_grad()
-        output = model(inputs)
-        loss = loss_fn(output, target)
+        o = model(inputs_embeds=x)
+        p = lm_head(o.last_hidden_state)
+        loss = cross_entropy(p, y, m)
         loss.backward()
         optimizer.step()
 
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             print(f"Epoch [{epoch}/100], Loss: {loss.item()}")
+    return model
 
 
 if __name__ == "__main__":
-    demo_text_dataloader()
-    demo_vqa_dataloader()
-    demo_control_dataloader()
+    train()
