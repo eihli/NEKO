@@ -482,11 +482,19 @@ def train(model):
 
     model, _lookup_embedding, _image_embedding, lm_head, optimizer, text_dataloader, vqa_dataloader = accelerator.prepare(model, _lookup_embedding, _image_embedding, lm_head, optimizer, text_dataloader, vqa_dataloader)
 
-    text_dataloader = iter(text_dataloader)
-    vqa_dataloader = iter(vqa_dataloader)
-    for epoch in range(20):
-        text_batch = next(text_dataloader)
-        vqa_batch = next(vqa_dataloader)
+    text_dataloader_iter = iter(text_dataloader)
+    vqa_dataloader_iter = iter(vqa_dataloader)
+    for epoch in range(2000):
+        try:
+            text_batch = next(text_dataloader_iter)
+        except StopIteration:
+            text_dataloader_iter = iter(text_dataloader)
+            text_batch = next(text_dataloader_iter)
+        try:
+            vqa_batch = next(vqa_dataloader_iter)
+        except StopIteration:
+            vqa_dataloader_iter = iter(vqa_dataloader)
+            vqa_batch = next(vqa_dataloader_iter)
         text_sequence, text_attention_mask, text_targets = embed_and_sequence_text(text_batch)
         vqa_sequence, vqa_attention_mask, vqa_targets = embed_and_sequence_vqa(vqa_batch)
         x = torch.concat([text_sequence, vqa_sequence])
@@ -499,9 +507,56 @@ def train(model):
         loss.backward()
         optimizer.step()
 
-        if epoch % 5 == 0:
-            print(f"Epoch [{epoch}/100], Loss: {loss.item()}")
-    return model
+        if epoch % 50 == 0:
+            print(f"Epoch [{epoch}/2000], Loss: {loss.item()}")
+    return model, lm_head, optimizer, accelerator, text_dataloader, vqa_dataloader
+
+
+def text_train(model):
+    global _lookup_embedding
+    accelerator = Accelerator()
+
+    lm_head = nn.Linear(model.config.hidden_size, text_tokenizer.vocab_size)
+    params = (
+        list(model.parameters())
+        + list(_lookup_embedding.parameters())
+        + list(lm_head.parameters())
+    )
+    optimizer = init_optimizer(params)
+
+    text_dataset = (
+        load_dataset(path="wikitext", name="wikitext-2-v1", streaming=True)
+        .filter(not_empty)
+        .map(tokenize, batched=True, batch_size=1000)
+    )
+    text_dataloader = DataLoader(
+        text_dataset["train"], batch_size=2, collate_fn=collate_fn
+    )
+
+    model, _lookup_embedding, lm_head, optimizer, text_dataloader = accelerator.prepare(model, _lookup_embedding, lm_head, optimizer, text_dataloader)
+
+    text_dataloader_iter = iter(text_dataloader)
+    for epoch in range(2000):
+        try:
+            text_batch = next(text_dataloader_iter)
+        except StopIteration:
+            text_dataloader_iter = iter(text_dataloader)
+            text_batch = next(text_dataloader_iter)
+        text_sequence, text_attention_mask, text_targets = embed_and_sequence_text(text_batch)
+        x = torch.concat([text_sequence])
+        y = torch.concat([text_targets])
+        m = torch.concat([text_attention_mask])
+        optimizer.zero_grad()
+        o = model(inputs_embeds=x)
+        p = lm_head(o.last_hidden_state)
+        loss = cross_entropy(p, y, m)
+        loss.backward()
+        optimizer.step()
+
+        if epoch % 50 == 0:
+            print(f"Epoch [{epoch}/2000], Loss: {loss.item()}")
+    return model, lm_head, optimizer, accelerator, text_dataloader
+
 
 
 if __name__ == "__main__":
