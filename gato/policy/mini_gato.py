@@ -110,14 +110,13 @@ def images_to_patches(images, patch_size=16):
 
 
 def patches_to_image(patches, image_shape, patch_size=16):
-    batch_size, num_patches, patch_dim = patches.shape
-    channels = patch_dim // (patch_size * patch_size)
-    height, width = image_shape[-2:]
+    batch_size, num_patches, patch_height, patch_width, patch_channels = patches.shape
+    channels, height, width = image_shape
     assert num_patches == (height // patch_size) * (
         width // patch_size
     ), "Number of patches doesn't match image size"
     assert (
-        patch_dim == channels * patch_size * patch_size
+        patch_height * patch_width * patch_channels == channels * patch_size * patch_size
     ), "Patch dimensions don't match the expected size"
     # Reshape patches to (batch_size, num_patches, channels, patch_size, patch_size)
     patches = patches.view(batch_size, num_patches, patch_size, patch_size, channels)
@@ -528,54 +527,3 @@ def train(model):
         if epoch % 10 == 0:
             print(f"Epoch [{epoch}/50], Loss: {loss.item()}")
     return model, lm_head, optimizer, accelerator, text_dataloader, vqa_dataloader
-
-
-def text_train(model):
-    global _lookup_embedding
-    accelerator = Accelerator()
-
-    lm_head = nn.Linear(model.config.hidden_size, text_tokenizer.vocab_size)
-    params = (
-        list(model.parameters())
-        + list(_lookup_embedding.parameters())
-        + list(lm_head.parameters())
-    )
-    optimizer = init_optimizer(params)
-
-    text_dataset = (
-        load_dataset(path="wikitext", name="wikitext-2-v1", streaming=True)
-        .filter(not_empty)
-        .map(tokenize, batched=True, batch_size=1000)
-    )
-    text_dataloader = DataLoader(
-        text_dataset["train"], batch_size=2, collate_fn=collate_fn
-    )
-
-    model, _lookup_embedding, lm_head, optimizer, text_dataloader = accelerator.prepare(model, _lookup_embedding, lm_head, optimizer, text_dataloader)
-
-    text_dataloader_iter = iter(text_dataloader)
-    for epoch in range(2000):
-        try:
-            text_batch = next(text_dataloader_iter)
-        except StopIteration:
-            text_dataloader_iter = iter(text_dataloader)
-            text_batch = next(text_dataloader_iter)
-        text_sequence, text_attention_mask, text_targets = embed_and_sequence_text(text_batch)
-        x = torch.concat([text_sequence])
-        y = torch.concat([text_targets])
-        m = torch.concat([text_attention_mask])
-        optimizer.zero_grad()
-        o = model(inputs_embeds=x)
-        p = lm_head(o.last_hidden_state)
-        loss = cross_entropy(p, y, m)
-        loss.backward()
-        optimizer.step()
-
-        if epoch % 50 == 0:
-            print(f"Epoch [{epoch}/2000], Loss: {loss.item()}")
-    return model, lm_head, optimizer, accelerator, text_dataloader
-
-
-
-if __name__ == "__main__":
-    train()
