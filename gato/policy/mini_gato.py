@@ -26,9 +26,13 @@ def tokenize(sample):
 
 
 ####
-#### Datasets and Tokenization
+#### § 2.1 Tokenization
 ####
 
+## Gato encodes text with SentencePiece. We're choosing GPT2. The only
+## difference ought to be related to the vocabulary size. Gato tokenizes
+## discrete values (and continuous values by first discretizing them) into
+## sequences of integers which get shifted to be at the end of the vocabulary.
 
 ##
 ## Text Datasets, DataLoaders, and Transforms
@@ -52,6 +56,20 @@ def collate_fn(batch):
         "attention_mask": attention_mask,
     }
 
+
+def demo_shakespeare():
+    shakespeare_dataset = (
+        load_dataset("Trelis/tiny-shakespeare")
+        .map(lambda x: {"text": x["Text"]})
+        .map(mg.tokenize, batched=True, batch_size=8)
+    )
+    shakespeare_dataloader = DataLoader(
+        shakespeare_dataset["train"], batch_size=2, collate_fn=mg.collate_fn
+    )
+    shakespeare_batch = next(iter(shakespeare_dataloader))
+    shakespeare_batch["input_ids"].shape, shakespeare_batch
+    dataset_sample = next(iter(sample_dataset['train']))
+    dataset_sample
 
 def demo_text_dataloader():
     text_dataset = (
@@ -484,7 +502,7 @@ def train(model):
 
     text_dataloader_iter = iter(text_dataloader)
     vqa_dataloader_iter = iter(vqa_dataloader)
-    for epoch in range(2000):
+    for epoch in range(50):
         try:
             text_batch = next(text_dataloader_iter)
         except StopIteration:
@@ -507,8 +525,8 @@ def train(model):
         loss.backward()
         optimizer.step()
 
-        if epoch % 50 == 0:
-            print(f"Epoch [{epoch}/2000], Loss: {loss.item()}")
+        if epoch % 10 == 0:
+            print(f"Epoch [{epoch}/50], Loss: {loss.item()}")
     return model, lm_head, optimizer, accelerator, text_dataloader, vqa_dataloader
 
 
