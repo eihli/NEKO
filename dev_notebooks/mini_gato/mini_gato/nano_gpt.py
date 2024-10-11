@@ -174,10 +174,10 @@ class GPT(nn.Module):
         if idx is None:
             idx = emb
         device = idx.device
-        b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         if emb is None:
+            b, t = idx.size()
+            assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
             pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
     
             # forward the GPT model itself
@@ -185,21 +185,13 @@ class GPT(nn.Module):
             pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
             x = self.transformer.drop(tok_emb + pos_emb)
         else:
+            b, t, c = idx.size()            
             x = emb
 
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-        else:
-            logits = self.lm_head(x)
-            loss = None
-
-        return logits, loss
+        return x
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
