@@ -167,7 +167,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx=None, targets=None, emb=None):
+    def forward(self, idx=None, targemaets=None, emb=None):
         # Here's a modification to Karpathy's version.
         # We want to calculate our own embeddings, outside of this forward method.
         assert idx is not None or emb is not None, "Must provide either inputs or embeddings."
